@@ -1,0 +1,14 @@
+# Project 7: Aerial Firefighting
+# Install with: pip install -r requirements.txt
+# Tested with Python 3.13, numpy 2.4, matplotlib 3.11, pillow 12.3
+
+numpy>=1.24
+matplotlib>=3.7
+pillow>=9.0          # writes the GIF animations (also installed by matplotlib)
+
+# Running main.ipynb
+notebook>=7.0        # Jupyter in the browser
+ipykernel>=6.0       # Python kernel for Jupyter and VS Code
+
+# Optional: MP4 animations in the last cell of main.ipynb (bundles its own ffmpeg)
+# imageio-ffmpeg>=0.4
