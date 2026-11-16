@@ -58,7 +58,7 @@ class BezierCurve(Curve):
             for i in range(len(diff_points) - r):
                 diff_points[i] = (1 - u) * diff_points[i] + u * diff_points[i + 1]
         tangent = diff_points[0]
-        return tangent
+        return tangent / np.linalg.norm(tangent)
 
 
 class SineWave(Curve):
@@ -82,7 +82,7 @@ class SineWave(Curve):
         dy_du = 0.0
         dz_du = self.amplitude * k * np.cos(k * u)
         tangent = np.array([dx_du, dy_du, dz_du])
-        return tangent 
+        return tangent / np.linalg.norm(tangent)
 
 
 class Simulation:
@@ -125,14 +125,14 @@ class Simulation:
     # Each timestep we advance the curve parameter u by du = V*DT / ||tangent||,
     # which ensures the aircraft moves exactly V*DT meters along the curve.
     def _update_aircraft_state(self, airplane, curve):
-        pos     = 
-        tangent = 
+        pos     = curve.get_position(self.u)
+        tangent = curve.get_tangent(self.u)
 
         tangent_norm = np.linalg.norm(tangent)
-        du       = 
+        du       = airplane.speed * self.DT / tangent_norm
         self.u  += du
 
-        airplane.pos = 
+        airplane.pos = pos
         airplane.dir = tangent / tangent_norm
         airplane.vel = airplane.dir * airplane.speed
 
@@ -157,11 +157,11 @@ class Simulation:
         nozzle_idx = np.arange(self.drops_released, self.drops_released + count) % 4
 
         base_positions = np.tile(airplane.pos + aft_offset, (count, 1))
-        base_positions[nozzle_idx == 1] += # right nozzle: +spacing in plane_right direction
-        base_positions[nozzle_idx == 2] -= # left nozzle:  -spacing in plane_right direction
-        base_positions[nozzle_idx == 3] -= # aft nozzle:   -spacing along airplane.dir direction
+        base_positions[nozzle_idx == 1] += self.SPACING * plane_right  # right nozzle: +spacing in plane_right direction
+        base_positions[nozzle_idx == 2] -= self.SPACING * plane_right  # left nozzle:  -spacing in plane_right direction
+        base_positions[nozzle_idx == 3] -= self.SPACING * airplane.dir  # aft nozzle:   -spacing along airplane.dir direction
 
-        end_positions = 
+        end_positions = base_positions - self.NOZZLE_DROP_OFFSET * plane_up
 
         return base_positions, end_positions
 
@@ -180,13 +180,13 @@ class Simulation:
         n_rand /= np.linalg.norm(n_rand, axis=1, keepdims=True)
 
         # Perturb the nozzle direction by spray_amplitude and re-normalise
-        directions = 
-        n_spray    = 
+        directions = n_base + self.spray_amplitude * n_rand
+        n_spray    = directions / np.linalg.norm(directions, axis=1, keepdims=True)
 
         # All droplets inherit the aircraft velocity at the moment of release
         v_nozzle = np.tile(airplane.vel, (count, 1))
 
-        return 
+        return v_nozzle + self.eject_speed * n_spray
 
 
     # --- Step 4: Release droplets ---
@@ -212,7 +212,7 @@ class Simulation:
         velocities   = self._compute_spray_velocities(airplane, plane_right, sprayer_base, sprayer_end, count)
 
         # Pre-integrate one timestep so droplets start one step ahead of the nozzle
-        positions = sprayer_end + 
+        positions = sprayer_end + velocities * self.DT
 
         self.r_drop[new_indices]  = positions
         self.v_drop[new_indices]  = velocities
@@ -232,8 +232,8 @@ class Simulation:
             r  = getattr(self, 'FIRE_RADIUS',
                          min(self.FIRE_X_MAX - self.FIRE_X_MIN,
                              self.FIRE_Z_MAX - self.FIRE_Z_MIN) / 2)
-            dist2 = 
-            return dist2 <= 
+            dist2 = (r_xz[:, 0] - cx) ** 2 + (r_xz[:, 1] - cz) ** 2
+            return dist2 <= r ** 2
         else:  # 'box'
             return (
                 (r_xz[:, 0] > self.FIRE_X_MIN) & (r_xz[:, 0] < self.FIRE_X_MAX) &
@@ -250,8 +250,8 @@ class Simulation:
         in_fire = self._in_fire_zone(r_curr[:, [0, 2]])
 
         if np.any(in_fire):
-            y_heights          = r_curr[in_fire, 1]
-            v_up[in_fire, 1]  = 
+            y_heights         = r_curr[in_fire, 1]
+            v_up[in_fire, 1]  = self.UPDRAFT_VELOCITY * np.exp(-self.UPDRAFT_DECAY * np.maximum(0, y_heights))
 
         return v_up
 
@@ -264,7 +264,7 @@ class Simulation:
         speed      = np.linalg.norm(v_rel, axis=1)
         safe_speed = np.where(speed == 0, 1e-10, speed)  # avoid division by zero
 
-        Re = 
+        Re = 2 * self.r_particle * self.RHO_A * safe_speed / self.MU_F
 
         # Chow piecewise drag coefficient 
         Cd = np.where(Re <= 1,    24.0 / Re,
@@ -296,16 +296,16 @@ class Simulation:
         v_up   = self._compute_updraft(r_curr)
 
         # Relative velocity of the fluid with respect to the droplet
-        v_rel  =
+        v_rel  = v_curr - v_wind
 
         f_drag = self._compute_drag(v_rel)
 
         # Acceleration
-        acc = 
+        acc = f_drag / (self.RETARDANT_DENSITY * self.vol_particle) * self.G
 
         # Semi Implicit Euler integration
-        v_curr += 
-        r_curr += 
+        v_curr += acc * self.DT
+        r_curr += v_curr * self.DT
 
         # Ground collision: clamp y to 0 and mark particle as landed
         hits = r_curr[:, 1] <= 0
@@ -331,7 +331,7 @@ class Simulation:
         for t in range(self.STEPS):
             plane_right = self._update_aircraft_state(airplane, plane_curve)
             self._release_droplets(airplane, plane_right, t)
-            self._step_physics(# mask for particles that are active AND not yet landed)
+            self._step_physics(self.landed == False)  # mask for particles that are active AND not yet landed
             self.history_plane.append(airplane.pos.copy())
             self.history_particles.append(self.r_drop.copy())
             if self.drops_released > 0 and self.landed.sum() == self.drops_released:
@@ -348,8 +348,7 @@ class Simulation:
         in_fire   = self._in_fire_zone(landed_xz)
         N_hit     = sum(in_fire)
         N_total   = self.num_particles
-        return # cost
-
+        return self.W_1 * (1 - (N_hit / N_total))  + self.W_2 * (1 - (self.airplane.y0 / self.Y0_MAX))  # cost
 
 # Example Execution
 if __name__ == "__main__":
