@@ -296,12 +296,12 @@ class Simulation:
         v_up   = self._compute_updraft(r_curr)
 
         # Relative velocity of the fluid with respect to the droplet
-        v_rel  = v_curr - v_wind
+        v_rel = v_wind + v_up - v_curr
 
         f_drag = self._compute_drag(v_rel)
 
         # Acceleration
-        acc = f_drag / (self.RETARDANT_DENSITY * self.vol_particle) * self.G
+        acc = f_drag / (self.RETARDANT_DENSITY * self.vol_particle) + self.G
 
         # Semi Implicit Euler integration
         v_curr += acc * self.DT
@@ -331,7 +331,7 @@ class Simulation:
         for t in range(self.STEPS):
             plane_right = self._update_aircraft_state(airplane, plane_curve)
             self._release_droplets(airplane, plane_right, t)
-            self._step_physics(self.landed == False)  # mask for particles that are active AND not yet landed
+            self._step_physics(self.active & ~self.landed)  # mask for particles that are active AND not yet landed
             self.history_plane.append(airplane.pos.copy())
             self.history_particles.append(self.r_drop.copy())
             if self.drops_released > 0 and self.landed.sum() == self.drops_released:
